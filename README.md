@@ -11,15 +11,19 @@ AI-powered news curation using GitHub Issues as your UI. No frontend, no server,
 3. **Pick**: Results appear as a GitHub Issue with checkboxes — open the GitHub app on your phone, tick what you want
 4. **Capture**: Close the Issue → GitHub Actions auto-fetches full articles as Markdown
 
-```
-You: python web_digest.py "TSMC supply chain risk"
- ↓
-GitHub Issue created with 10 scored articles
- ↓
-You check 3 articles on your phone, close the Issue
- ↓
-GitHub Actions saves full Markdown to captures/
-```
+### The full flow in action
+
+**Trigger a search via Telegram (optional) or CLI → get notified when results are ready → pick articles → auto-capture:**
+
+![Telegram Bot flow — search command, progress notification, and capture confirmation](sample/2026-03-06-02.png)
+
+**GitHub Issue with scored checkbox list — tick what you want, close to capture:**
+
+![GitHub Issue discovery panel with checkbox article list](sample/2026-03-06-01.png)
+
+**Captured article as clean Markdown:**
+
+![Captured Markdown article with metadata](sample/2026-03-06-03.png)
 
 ## Quick Start
 
