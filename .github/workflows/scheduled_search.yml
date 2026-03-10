@@ -88,6 +88,9 @@ jobs:
           [ -z "$TOKEN" ] || [ -z "$CHAT_ID" ] && echo "Telegram not configured, skipping." && exit 0
           URLS=$(cat /tmp/issue_urls.txt 2>/dev/null || echo "")
           [ -z "$URLS" ] && exit 0
-          MSG="📬 New issues ready for review:%0A${URLS//$'\n'/%0A}"
+          MSG=$(printf "📬 New issues ready for review:\n%s" "$URLS")
+          # Use --data-urlencode to prevent injection via URL content
           curl -s -X POST "https://api.telegram.org/bot$TOKEN/sendMessage" \
-            -d "chat_id=$CHAT_ID&text=$MSG&disable_web_page_preview=true"
+            --data-urlencode "chat_id=$CHAT_ID" \
+            --data-urlencode "text=$MSG" \
+            --data-urlencode "disable_web_page_preview=true"

@@ -32,7 +32,7 @@ jobs:
           python-version: '3.10'
 
       - name: Install Dependencies
-        run: pip install requests trafilatura
+        run: pip install requests trafilatura pyyaml
 
       - name: Capture Selected Articles
         id: capture
@@ -121,7 +121,9 @@ jobs:
                   header += f"> Captured: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}\n\n"
                   header += "---\n\n"
 
-                  filename = f"captures/clip_{article_date.replace('-','')}_{url_hash}.md"
+                  # Sanitize date: keep only digits to prevent path traversal
+                  date_safe = re.sub(r'[^\d]', '', article_date)[:8] or datetime.datetime.now().strftime("%Y%m%d")
+                  filename = f"captures/clip_{date_safe}_{url_hash}.md"
                   with open(filename, "w", encoding="utf-8") as f:
                       f.write(header + content)
                   capture_count += 1
@@ -168,8 +170,10 @@ jobs:
         env:
           TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          ISSUE_TITLE: ${{ github.event.issue.title }}
         run: |
           [ -z "$TOKEN" ] || [ -z "$CHAT_ID" ] && exit 0
-          MSG="✅ Capture complete: ${{ github.event.issue.title }}"
+          # Use --data-urlencode to prevent injection via issue title
           curl -s -X POST "https://api.telegram.org/bot$TOKEN/sendMessage" \
-            -d "chat_id=$CHAT_ID&text=$MSG"
+            --data-urlencode "chat_id=$CHAT_ID" \
+            --data-urlencode "text=✅ Capture complete: $ISSUE_TITLE"

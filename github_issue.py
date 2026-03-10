@@ -7,13 +7,16 @@ import re
 import requests
 from datetime import datetime
 from typing import List, Dict
-from dotenv import load_dotenv
-
-load_dotenv()
+try:
+    from dotenv import load_dotenv as _load_dotenv
+except ImportError:
+    _load_dotenv = None
 
 
 class GitHubIssueOutput:
     def __init__(self):
+        if _load_dotenv:
+            _load_dotenv()
         self.token = os.getenv("GITHUB_TOKEN")
         self.repo = os.getenv("GITHUB_REPO")
 
@@ -32,8 +35,10 @@ class GitHubIssueOutput:
         """Create required labels if they don't exist (idempotent)."""
         url = f"https://api.github.com/repos/{self.repo}/labels"
         for name, color in [("discovery", "0075ca"), ("pending-capture", "e4e669")]:
-            requests.post(url, json={"name": name, "color": color}, headers=self._headers)
+            resp = requests.post(url, json={"name": name, "color": color}, headers=self._headers)
             # 201 = created, 422 = already exists — both are fine
+            if resp.status_code not in (201, 422):
+                print(f"  ⚠️ Failed to create label '{name}': {resp.status_code} — check token permissions")
 
     def publish(self, keywords: str, results: List[Dict]) -> str:
         """Create a discovery Issue with checkbox list."""
