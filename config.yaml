@@ -3,8 +3,11 @@
 # Search topics for scheduled (cron) mode
 # Each topic will generate a separate GitHub Issue with results
 topics:
-  - "AI agent framework"
-  - "台積電 供應鏈"
+  - "LLM 2026"
+  - "AI agent 2026"
+  - "OpenAI Anthropic Google AI 2026"
+  - "open source LLM 2026"
+  - "GitHub Copilot SDK"
 
 # Weight profiles: default, news, research
 # - default: balanced
