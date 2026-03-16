@@ -1,0 +1,68 @@
+name: AI Digest to Notion
+
+on:
+  schedule:
+    - cron: "0 1,7,13,19 * * *"  # UTC = 台灣 9:00/15:00/21:00/03:00
+  workflow_dispatch:  # 手動觸發
+
+jobs:
+  digest:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write  # 需要 commit seen_urls.json
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run digest for all topics
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          NOTION_API_KEY: ${{ secrets.NOTION_API_KEY }}
+          NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
+        run: |
+          python3 << 'PYEOF'
+          import os, yaml, logging
+          logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+
+          with open("config.yaml", "r") as f:
+              config = yaml.safe_load(f)
+
+          topics = config.get("topics", [])
+          profile = config.get("weight_profile", "default")
+
+          if not topics:
+              print("ERROR: No topics in config.yaml")
+              exit(1)
+
+          from web_digest import WebDigest
+          digest = WebDigest(weight_profile=profile)
+
+          errors = []
+          for topic in topics:
+              print(f"\n{'='*50}\nTopic: {topic}\n{'='*50}")
+              try:
+                  result = digest.run_digest(topic, topics=[topic])
+                  print(result)
+              except Exception as e:
+                  print(f"Error: {topic}: {e}")
+                  errors.append(topic)
+
+          if errors and len(errors) == len(topics):
+              print(f"All topics failed: {errors}")
+              exit(1)
+          PYEOF
+
+      - name: Commit seen_urls.json
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add seen_urls.json
+          git diff --staged --quiet || git commit -m "chore: update seen_urls [skip ci]"
+          git push

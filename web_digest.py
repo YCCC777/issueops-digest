@@ -3,7 +3,6 @@ issueops-digest: AI-powered news curation with GitHub Issues as UI.
 Search → AI Score → Checkbox Pick → Auto-capture.
 """
 import difflib
-import fcntl
 import json
 import logging
 import os
@@ -27,7 +26,7 @@ logger = logging.getLogger(__name__)
 # Load config
 CONFIG_PATH = Path(__file__).parent / "config.yaml"
 if CONFIG_PATH.exists():
-    with open(CONFIG_PATH, 'r') as f:
+    with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
         CONFIG = yaml.safe_load(f)
 else:
     CONFIG = {}
@@ -74,7 +73,11 @@ def _locked_update_usage(api_name: str) -> None:
     """Atomically read-modify-write usage stats with file locking."""
     USAGE_PATH.touch(exist_ok=True)
     with open(USAGE_PATH, 'r+') as f:
-        fcntl.flock(f, fcntl.LOCK_EX)
+        try:
+            import fcntl
+            fcntl.flock(f, fcntl.LOCK_EX)
+        except ImportError:
+            pass  # Windows: no file locking, acceptable for single-process use
         try:
             content = f.read()
             data = json.loads(content) if content.strip() else {}
@@ -87,7 +90,6 @@ def _locked_update_usage(api_name: str) -> None:
         f.seek(0)
         f.truncate()
         json.dump(data, f, indent=2)
-        # lock released when file closes
 
 def _get_usage_bucket(api_name: str) -> str:
     """Return the time-based bucket key: daily for gemini, monthly for others."""
@@ -111,7 +113,7 @@ def _check_quota_preflight() -> None:
     if not quotas:
         return
     hard_pct = min(quotas.get("hard_limit_percent", 100), 100)
-    for api_name in ["brave", "tavily", "gemini"]:
+    for api_name in ["tavily", "gemini"]:
         count, limit = _get_current_usage(api_name)
         if limit <= 0:
             continue
@@ -155,15 +157,11 @@ class WebDigest:
         _check_env_safety()
         profile = weight_profile or CONFIG.get("weight_profile", "default")
         self.weights: dict = WEIGHT_PROFILES.get(profile, WEIGHT_PROFILES["default"])
-        self.brave_key: str | None = os.getenv("BRAVE_API_KEY")
         self.tavily_key: str | None = os.getenv("TAVILY_API_KEY")
         self.gemini_key: str | None = os.getenv("GEMINI_API_KEY")
         self.gemini_model: str = CONFIG.get("gemini_model", "gemini-2.0-flash")
         self.dedup_threshold: float = CONFIG.get("dedup_threshold", 0.8)
 
-        if not self.brave_key:
-            logger.error("BRAVE_API_KEY not set. Check your .env file.")
-            sys.exit(1)
         if not self.gemini_key:
             logger.error("GEMINI_API_KEY not set. Check your .env file.")
             sys.exit(1)
@@ -221,55 +219,50 @@ class WebDigest:
             logger.warning("[Jina] Error: %s", e)
         return ""
 
-    def _search_brave(self, query: str) -> list[dict]:
-        if not self.brave_key:
-            return []
+    def _search_hackernews(self, query: str) -> list[dict]:
         results: list[dict] = []
-        headers = {"X-Subscription-Token": self.brave_key, "Accept": "application/json"}
+        base_url = "https://hn.algolia.com/api/v1"
+        params = {"query": query, "tags": "story", "hitsPerPage": 20}
 
-        if "site:" not in query:
-            try:
-                _track_api_call("brave")
-                resp = requests.get("https://api.search.brave.com/res/v1/news/search",
-                                    headers=headers, params={"q": query, "count": 25}, timeout=10)
-                if resp.status_code == 200:
-                    for r in resp.json().get("results", []):
-                        results.append({
-                            'title': f"[News] {r['title']}", 'link': r.get('url', ''),
-                            'snippet': r.get('description', ''),
-                            'source': self._extract_domain(r.get('url', '')),
-                            'base_score': 10, 'provider': 'brave',
-                            'published_time': r.get('published_time')
-                        })
-                elif resp.status_code == 429:
-                    logger.warning("[Brave News] Rate limited (429)")
-                elif resp.status_code == 401:
-                    logger.error("[Brave News] Authentication failed (401)")
-            except requests.RequestException as e:
-                logger.warning("[Brave News] Error: %s", e)
+        def _hn_hit_to_dict(r: dict, base_score: int) -> dict | None:
+            url = r.get("url", "")
+            if not url:
+                return None
+            pts = r.get("points") or 0
+            score = 10 if pts > 200 else (7 if pts > 50 else (5 if pts > 10 else 3))
+            snippet = r.get("story_text") or f"Points: {pts}, Comments: {r.get('num_comments', 0)}"
+            return {
+                'title': r.get('title', ''), 'link': url,
+                'snippet': snippet[:300],
+                'source': self._extract_domain(url),
+                'base_score': max(base_score, score),
+                'provider': 'hackernews',
+                'published_time': r.get('created_at'),
+            }
 
+        # Relevance-ranked results
         try:
-            _track_api_call("brave")
-            resp = requests.get("https://api.search.brave.com/res/v1/web/search",
-                                headers=headers, params={"q": query, "count": 20}, timeout=10)
+            logger.info("[HackerNews] Searching: '%s'", query)
+            resp = requests.get(f"{base_url}/search", params=params, timeout=10)
             if resp.status_code == 200:
-                for r in resp.json().get("web", {}).get("results", []):
-                    url = r.get('url', '')
-                    if "site:" not in query and url.count('/') < 4:
-                        continue
-                    results.append({
-                        'title': r.get('title', ''), 'link': url,
-                        'snippet': r.get('description', ''),
-                        'source': self._extract_domain(url),
-                        'base_score': 5 if "site:" not in query else 8,
-                        'provider': 'brave'
-                    })
-            elif resp.status_code == 429:
-                logger.warning("[Brave Web] Rate limited (429)")
-            elif resp.status_code == 401:
-                logger.error("[Brave Web] Authentication failed (401)")
+                for r in resp.json().get("hits", []):
+                    item = _hn_hit_to_dict(r, base_score=5)
+                    if item:
+                        results.append(item)
         except requests.RequestException as e:
-            logger.warning("[Brave Web] Error: %s", e)
+            logger.warning("[HackerNews] Search error: %s", e)
+
+        # Recent results (last ~48h)
+        try:
+            resp = requests.get(f"{base_url}/search_by_date", params={**params, "hitsPerPage": 10}, timeout=10)
+            if resp.status_code == 200:
+                for r in resp.json().get("hits", []):
+                    item = _hn_hit_to_dict(r, base_score=8)
+                    if item:
+                        results.append(item)
+        except requests.RequestException as e:
+            logger.warning("[HackerNews] Date search error: %s", e)
+
         return results
 
     def _search_tavily(self, query: str, include_domains: list[str] | None = None) -> list[dict]:
@@ -300,20 +293,10 @@ class WebDigest:
             logger.warning("[Tavily] Error: %s", e)
         return []
 
-    def search_wide(self, query: str, is_social: bool = False) -> list[dict]:
-        if is_social:
-            logger.info("[Social] Probing: '%s'", query)
-            brave = self._search_brave(query)
-            domains = ["twitter.com", "x.com", "reddit.com"]
-            clean_q = query.replace("site:twitter.com", "").replace("site:x.com", "").replace("site:reddit.com", "").strip()
-            tavily = self._search_tavily(clean_q, include_domains=domains)
-            return brave + tavily
-
-        logger.info("[Brave]  Searching: '%s'", query)
-        brave = self._search_brave(query)
-        logger.info("[Tavily] Searching: '%s'", query)
+    def search_wide(self, query: str) -> list[dict]:
+        hn = self._search_hackernews(query)
         tavily = self._search_tavily(query)
-        return brave + tavily
+        return hn + tavily
 
     @staticmethod
     def _sanitize_for_prompt(text: str) -> str:
@@ -443,8 +426,8 @@ Return JSON: [{{"id": 0, "rel": 8.5, "dup": false}}, ...]
 
         return sorted(final_list, key=lambda x: x['score'], reverse=True)[:25]
 
-    def run_digest(self, query: str) -> str:
-        from github_issue import GitHubIssueOutput
+    def run_digest(self, query: str, topics: list[str] | None = None) -> str:
+        import notion_output
 
         logger.info("Starting multi-dimensional search: '%s'", query)
         sub_queries = [q.strip() for q in query.strip('"').split('|') if q.strip()]
@@ -452,13 +435,6 @@ Return JSON: [{{"id": 0, "rel": 8.5, "dup": false}}, ...]
         results_per_query: list[list[dict]] = []
         for sq in sub_queries:
             results_per_query.append(self.search_wide(sq))
-
-        # Auto-append social + deep content searches
-        if "site:" not in query and len(query) > 2:
-            social_q = f"{sub_queries[0]} (site:reddit.com OR site:x.com OR site:twitter.com)"
-            results_per_query.append(self.search_wide(social_q, is_social=True))
-            deep_q = f"{sub_queries[0]} (site:substack.com OR site:medium.com)"
-            results_per_query.append(self.search_wide(deep_q))
 
         # Interleaving (round-robin merge for fair exposure)
         raw_results: list[dict] = []
@@ -474,7 +450,25 @@ Return JSON: [{{"id": 0, "rel": 8.5, "dup": false}}, ...]
         if not top:
             return "No results passed AI scoring."
 
-        return GitHubIssueOutput().publish(query, top)
+        # Filter low-score, cap at 10, attach topic tags
+        candidates = [a for a in top if a.get("score", 0) > 5][:10]
+        if not candidates:
+            return "No results scored above threshold."
+
+        if topics:
+            for a in candidates:
+                a.setdefault("topics", topics)
+
+        # Cross-run dedup
+        seen = notion_output.load_seen_urls()
+        new_articles = [a for a in candidates if a.get("link", "") not in seen]
+
+        if not new_articles:
+            logger.info("No new articles to push (all seen).")
+            return "No new articles."
+
+        pushed = notion_output.push_articles(new_articles, gemini_key=self.gemini_key)
+        return f"Pushed {pushed} new articles to Notion."
 
 
 if __name__ == "__main__":

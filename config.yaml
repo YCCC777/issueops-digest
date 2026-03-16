@@ -38,7 +38,7 @@ social_domains:
   - reddit.com
 
 # Gemini model for AI scoring (override if needed)
-# gemini_model: gemini-2.0-flash
+gemini_model: gemini-2.5-flash
 
 # Dedup similarity threshold (0.0 - 1.0, higher = stricter)
 # dedup_threshold: 0.8
@@ -46,7 +46,6 @@ social_domains:
 # API quota tracking (CLI mode only)
 # hard_limit_percent: refuse to run when usage exceeds this threshold
 quotas:
-  brave_monthly: 1000
   tavily_monthly: 1000
   gemini_daily: 1500
   warn_at_percent: 80
